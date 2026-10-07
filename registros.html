@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WiFiVault - Base de Datos Interactiva</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <div class="app-layout large-layout">
+        <!-- Barra de navegación superior -->
+        <div class="top-nav">
+            <div class="nav-brand">
+                <span class="brand-icon">📊</span>
+                <h1>WiFi<strong>Vault</strong> <span class="counter-badge" id="totalCounter">0 Redes</span></h1>
+            </div>
+            <a href="index.html" class="btn-nav btn-nav-accent">
+                <span>➕</span> Nuevo Registro
+            </a>
+        </div>
+
+        <!-- Tabla y Controles -->
+        <div class="main-card">
+            <div class="controls-toolbar">
+                <div class="search-wrapper">
+                    <span class="search-icon">🔍</span>
+                    <input type="text" id="inputBuscar" class="search-input" placeholder="Buscar cliente, calle o barrio...">
+                </div>
+                <button id="btnExportar" class="btn-excel">
+                    <span>📥</span> Exportar Planilla (.CSV)
+                </button>
+            </div>
+
+            <div class="table-responsive">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Cliente</th>
+                            <th>Dirección Asignada</th>
+                            <th>Red (SSID)</th>
+                            <th>Contraseña de Seguridad</th>
+                            <th style="text-align: center; width: 150px;">Acciones</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tablaClientes">
+                        <tr><td colspan="5" class="empty-msg">Cargando datos desde la nube...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://gstatic.com";
+        import { getFirestore, collection, getDocs, doc, updateDoc, deleteDoc } from "https://gstatic.com";
+
+        // !!! PON AQUÍ TUS CREDENCIALES AL DARLE CLIC A "CONFIG" !!!
+        const firebaseConfig = {
+            apiKey: "AIzaSyCd5mBGW3sbeV2Cp3VjeVwiiD2QzvSymjo", 
+            authDomain: "://firebaseapp.com",
+            projectId: "wi-fi-dcfd6",
+            storageBucket: "://appspot.com",
+            messagingSenderId: "903524317999",
+            appId: "1:903524317999:web:010580378d8d1f8b077fda"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+
+        function actualizarContador(total) {
+            document.getElementById('totalCounter').innerText = total + (total === 1 ? " Red" : " Redes");
+        }
+        // Sistema global de renderizado y asignación de botones in-module
+        async function mostrarRegistros(filtro = "") {
+            var tablaBody = document.getElementById('tablaClientes');
+            if (!tablaBody) return;
+
+            try {
+                const querySnapshot = await getDocs(collection(db, "redes_wifi"));
+                let listaClientes = [];
+                querySnapshot.forEach((docSnap) => {
+                    listaClientes.push({ id: docSnap.id, ...docSnap.data() });
+                });
+
+                actualizarContador(listaClientes.length);
+                tablaBody.innerHTML = "";
+
+                var listaFiltrada = listaClientes.filter(function(cliente) {
+                    return cliente.nombre.toLowerCase().includes(filtro.toLowerCase()) || 
+                           cliente.ubicacion.toLowerCase().includes(filtro.toLowerCase());
+                });
+
+                if (listaFiltrada.length === 0) {
+                    tablaBody.innerHTML = '<tr><td colspan="5" class="empty-msg">No se encontraron terminales registradas.</td></tr>';
+                    return;
+                }
+
+                listaFiltrada.forEach(function(cliente) {
+                    var fila = document.createElement('tr');
+                    fila.id = "fila-" + cliente.id;
+
+                    fila.innerHTML = `
+                        <td><div class="client-name" id="label-nombre-${cliente.id}">${cliente.nombre}</div></td>
+                        <td><div class="address-text" id="label-ubicacion-${cliente.id}">${cliente.ubicacion}</div></td>
+                        <td><span class="badge-ssid" id="label-red-${cliente.id}">${cliente.red}</span></td>
+                        <td>
+                            <div class="password-container-row">
+                                <span class="crypto-password" id="label-password-${cliente.id}">${cliente.password}</span>
+                                <button class="btn-copy" data-pass="${cliente.password}">📋</button>
+                            </div>
+                        </td>
+                        <td style="text-align: center;">
+                            <div class="actions-container-row">
+                                <button class="btn-edit" data-id="${cliente.id}">⚙️</button>
+                                <button class="btn-delete" data-id="${cliente.id}">❌</button>
+                            </div>
+                        </td>
+                    `;
+                    tablaBody.appendChild(fila);
+                });
+
+                // ASIGNACIÓN DE EVENTOS SEGUROS
+                document.querySelectorAll('.btn-copy').forEach(btn => {
+                    btn.addEventListener('click', function() {
+                        var pass = this.getAttribute('data-pass');
+                        var boton = this;
+                        navigator.clipboard.writeText(pass).then(function() {
+                            boton.innerText = "✅";
+                            setTimeout(function() { boton.innerText = "📋"; }, 1500);
+                        });
+                    });
+                });
+
+                document.querySelectorAll('.btn-edit').forEach(btn => {
+                    btn.addEventListener('click', function() {
+                        var id = this.getAttribute('data-id');
+                        activarEdicion(id);
+                    });
+                });
+
+                document.querySelectorAll('.btn-delete').forEach(btn => {
+                    btn.addEventListener('click', function() {
+                        var id = this.getAttribute('data-id');
+                        eliminarRegistro(id);
+                    });
+                });
+
+            } catch (error) {
+                console.error("Error: ", error);
+                tablaBody.innerHTML = '<tr><td colspan="5" class="empty-msg">Error de conexión. Revisa las reglas en "if true;".</td></tr>';
+            }
+        }
+
+        function activarEdicion(id) {
+            var lblNombre = document.getElementById('label-nombre-' + id);
+            var lblUbicacion = document.getElementById('label-ubicacion-' + id);
+            var lblRed = document.getElementById('label-red-' + id);
+            var lblPassword = document.getElementById('label-password-' + id);
+            var fila = document.getElementById('fila-' + id);
+
+            var btnEdit = fila.querySelector('.btn-edit');
+            var btnDel = fila.querySelector('.btn-delete');
+
+            lblNombre.innerHTML = `<input type="text" class="table-input" id="edit-nombre-${id}" value="${lblNombre.innerText}">`;
+            lblUbicacion.innerHTML = `<input type="text" class="table-input" id="edit-ubicacion-${id}" value="${lblUbicacion.innerText}">`;
+            lblRed.innerHTML = `<input type="text" class="table-input" id="edit-red-${id}" value="${lblRed.innerText}">`;
+            
+            var parentPass = lblPassword.parentElement;
+            parentPass.innerHTML = `<span class="crypto-password"><input type="text" class="table-input password-field" id="edit-password-${id}" value="${lblPassword.innerText}"></span>`;
+
+            btnEdit.textContent = "💾";
+            btnEdit.className = "btn-save-inline";
+            
+            var clonEdit = btnEdit.cloneNode(true);
+            btnEdit.parentNode.replaceChild(clonEdit, btnEdit);
+            clonEdit.addEventListener('click', function() { guardarEdicion(id); });
+
+            btnDel.textContent = "↩️";
+            btnDel.className = "btn-cancel-inline";
+            var clonDel = btnDel.cloneNode(true);
+            btnDel.parentNode.replaceChild(clonDel, btnDel);
+            clonDel.addEventListener('click', function() { mostrarRegistros(document.getElementById('inputBuscar').value); });
+        }
+
+        async function guardarEdicion(id) {
+            var valNombre = document.getElementById('edit-nombre-' + id).value.trim();
+            var valUbicacion = document.getElementById('edit-ubicacion-' + id).value.trim();
+            var valRed = document.getElementById('edit-red-' + id).value.trim();
+            var valPassword = document.getElementById('edit-password-' + id).value;
+
+            if (!valNombre || !valUbicacion || !valRed || !valPassword) {
+                alert("Campos vacíos.");
+                return;
+            }
+
+            try {
+                await updateDoc(doc(db, "redes_wifi", id), {
+                    nombre: valNombre,
+                    ubicacion: valUbicacion,
+                    red: valRed,
+                    password: valPassword
+                });
+                mostrarRegistros(document.getElementById('inputBuscar').value);
+            } catch (error) {
+                alert("No se pudo actualizar.");
+            }
+        }
+
+        async function eliminarRegistro(id) {
+            if (confirm("¿Purgar este registro de la nube?")) {
+                try {
+                    await deleteDoc(doc(db, "redes_wifi", id));
+                    mostrarRegistros(document.getElementById('inputBuscar').value);
+                } catch (error) {
+                    alert("No se pudo eliminar.");
+                }
+            }
+        }
+
+        document.getElementById('inputBuscar').addEventListener('input', function() {
+            mostrarRegistros(this.value);
+        });
+
+        document.getElementById('btnExportar').onclick = async function() {
+            const querySnapshot = await getDocs(collection(db, "redes_wifi"));
+            if (querySnapshot.empty) { alert("No hay datos."); return; }
+
+            var contenidoCsv = "\uFEFFCliente;Dirección Completa;Red (SSID);Contraseña\n";
+            querySnapshot.forEach((doc) => {
+                var c = doc.data();
+                contenidoCsv += `"${c.nombre}";"${c.ubicacion}";"${c.red}";"${c.password}"\n`;
+            });
+
+            var blob = new Blob([contenidoCsv], { type: 'text/csv;charset=utf-8;' });
+            var enlace = document.createElement("a");
+            enlace.href = URL.createObjectURL(blob);
+            enlace.setAttribute("download", "Base_Datos_WiFi.csv");
+            document.body.appendChild(enlace);
+            enlace.click();
+            document.body.removeChild(enlace);
+        };
+
+        document.addEventListener('DOMContentLoaded', function() {
+            mostrarRegistros();
+        });
+    </script>
+</body>
+</html>
